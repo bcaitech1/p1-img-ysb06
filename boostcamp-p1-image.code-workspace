@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../opt/ml/input"
+		},
+		{
+			"path": "../../opt/ml/code"
+		}
+	],
+	"settings": {
+		"python.pythonPath": "/opt/conda/envs/boostcamp/bin/python"
+	}
+}
