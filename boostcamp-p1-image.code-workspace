@@ -11,6 +11,6 @@
 		}
 	],
 	"settings": {
-		"python.pythonPath": "/opt/conda/envs/boostcamp/bin/python"
+		"python.pythonPath": "/opt/conda/bin/python",
 	}
 }
