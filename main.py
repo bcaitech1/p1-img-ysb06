@@ -1,16 +1,14 @@
-from typing import Any
-from torch.utils.data.dataloader import DataLoader
-from mask_detector.dataset import MaskedFaceDataset, AgeGroup
-from torch import LongTensor
+import pandas as pd
+from mask_detector.dataset import Gender, generate_train_datasets
+from torch.utils.data import DataLoader
 
-class Test:
-    def __init__(self, name) -> None:
-        self.text = name
+train_set, valid_set = generate_train_datasets("/opt/ml/input/data")
 
-    def __call__(self, *args: Any, **kwds: Any) -> Any:
-        print(self.text)
-        print(args[0])
+train_set_loader = DataLoader(train_set, 4)
+valid_set_loader = DataLoader(valid_set, 4)
 
-d = {"A": Test("A"), "B": Test("B")}
-
-d("Test OK")["A"]
+for source, target, path_text in train_set_loader:
+    print(source)
+    print(target)
+    print(path_text)
+    break
