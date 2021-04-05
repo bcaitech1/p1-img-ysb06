@@ -12,5 +12,6 @@
 	],
 	"settings": {
 		"python.pythonPath": "/opt/conda/bin/python",
+		"jupyter.notebookFileRoot": "${workspaceFolder}"
 	}
 }

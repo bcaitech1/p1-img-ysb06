@@ -8,8 +8,7 @@ import pandas as pd
 from albumentations.augmentations import SmallestMaxSize
 from albumentations.pytorch import ToTensorV2
 from glob import glob
-from pandas.core.series import Series
-from torch import LongTensor, Tensor
+from torch import Tensor
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
@@ -34,6 +33,11 @@ class PersonLabel():
         self.correct_mask: bool = False
         self.gender: Gender = Gender.Male
         self.age: int = 0
+    
+    def __repr__(self) -> str:
+        mask = "Correct Mask" if self.correct_mask else "Incorrect Mask"
+        mask = mask if self.mask_exist else "No mask"
+        return str({"Mask": mask, "Gender": self.gender.name, "Age" : self.age})
 
     def get_combined_label(self) -> int:
         label = 0
@@ -45,33 +49,33 @@ class PersonLabel():
 
         label += self.gender.value * 3 + self.get_age_label().item()
 
-        return LongTensor([label])
+        return label
 
-    def get_mask_exist_label(self) -> LongTensor:
-        return LongTensor([self.mask_exist])
+    def get_mask_exist_label(self) -> int:
+        return self.mask_exist
 
-    def get_correct_mask_label(self) -> LongTensor:
-        return LongTensor([self.correct_mask])
+    def get_correct_mask_label(self) -> int:
+        return self.correct_mask
 
-    def get_gender_label(self) -> LongTensor:
-        return LongTensor([self.gender.value])
+    def get_gender_label(self) -> int:
+        return self.gender.value
 
-    def get_age_label(self) -> LongTensor:
+    def get_age_label(self) -> int:
         if self.age < 30:
-            return LongTensor([0])
+            return 0
         elif self.age > 59:
-            return LongTensor([2])
+            return 2
         else:
-            return LongTensor([1])
+            return 1
 
-    def get_under30_label(self) -> LongTensor:
-        return LongTensor([int(self.age < 30)])
+    def get_under30_label(self) -> int:
+        return int(self.age < 30)
 
-    def get_over59_label(self) -> LongTensor:
-        return LongTensor([int(self.age > 59)])
+    def get_over59_label(self) -> int:
+        return int(self.age > 59)
     
-    def get_label(self, label_type: DatasetType) -> LongTensor:
-        label: LongTensor = None
+    def get_label(self, label_type: DatasetType) -> int:
+        label: int = None
         if label_type == DatasetType.Mask_Weared:
             label = self.get_mask_exist_label()
         elif label_type == DatasetType.Correct_Mask:
@@ -81,7 +85,7 @@ class PersonLabel():
         elif label_type == DatasetType.Under30Age:
             label = self.get_under30_label()
         elif label_type == DatasetType.Over59Age:
-            label = self.get_correct_mask_label()
+            label = self.get_over59_label()
         else:
             label = self.get_combined_label()
         
@@ -115,7 +119,6 @@ class MaskedFaceDataset(Dataset):
         source = self.transform(image=target.image_raw)["image"]
         label = target.label.get_label(self.serve_type)
 
-        # 혹시 Data를 Load했을 때 3번째 부분이 문제가 될 수 있으므로 테스트 필요
         return source, label, target.image_path
 
     def generate_serve_list(self, serve_type: DatasetType, shuffle: bool = False, random_seed: int = None):
@@ -133,15 +136,16 @@ class MaskedFaceDataset(Dataset):
         for index, data in enumerate(self.data):
             # 하위 수준 모델(마스크 제대로 썼는지, 60이상인지)에서 들어오는 데이터는 정확할 것이라고 판단.
             if serve_type == DatasetType.Mask_Weared:
-                # 마스크를 쓴 데이터가 적은 데이터이다 (2:5)
-                if data.label.mask_exist == True:
+                # 마스크를 쓰지 않은 데이터가 적은 데이터이다 (2:5)
+                if data.label.mask_exist == False:
                     lesser_class_group.append(index)
                 else:
                     greater_class_group.append(index)
             elif serve_type == DatasetType.Correct_Mask:
                 # 마스크를 잘못 쓴 데이터가 적은 데이터이다 (1:5)
                 if data.label.mask_exist == True:   # 마스크가 없는 데이터는 아예 넣지 않음
-                    if data.label.correct_mask == True:
+                    # 그런데 넣어도 될 것 같음...여유가 되면 넣은 것과 안 넣은 것 비교해 볼 것
+                    if data.label.correct_mask == False:
                         lesser_class_group.append(index)
                     else:
                         greater_class_group.append(index)
@@ -164,15 +168,22 @@ class MaskedFaceDataset(Dataset):
                     greater_class_group.append(index)
             else:
                 self.serve_list = [*range(len(self.data))]
+                if shuffle:
+                    rnd.shuffle(self.serve_list)
                 return  
                 # 알 수 없는 데이터셋 형식은 원래 데이터 그대로 나오도록 처리
         
+        print(f"-- Original Data")
+        print(f"Lesser Data: {len(lesser_class_group)}")
+        print(f"Greater Data: {len(greater_class_group)}\n")
+
         if shuffle:
             rnd.shuffle(lesser_class_group)
             rnd.shuffle(greater_class_group)
         
         if len(lesser_class_group) > len(greater_class_group):
             raise Exception("Dividing code error")
+        # 여기를 에러로 처리하지 말고 적은 쪽을 자동으로 판단하는 기능을 추가하자
 
         while len(lesser_class_group) * 2 < len(greater_class_group):
             lesser_class_group *= 2
@@ -185,47 +196,9 @@ class MaskedFaceDataset(Dataset):
         if shuffle:
             rnd.shuffle(self.serve_list)
         
-
-def get_basic_train_transforms(
-        image_size: Tuple[int, int], 
-        mean: Tuple[float, float, float] = (0.548, 0.504, 0.479), 
-        std: Tuple[float, float, float] = (0.237, 0.247, 0.246)
-    ):
-    min_length = min(image_size[0], image_size[1])
-    train_transforms = A.Compose([
-        SmallestMaxSize(max_size=min_length, always_apply=True),
-        A.CenterCrop(min_length, min_length, always_apply=True),
-        A.Resize(image_size[0], image_size[1], p=1.0),
-        A.HorizontalFlip(p=0.5),
-        A.ShiftScaleRotate(p=0.5),
-        A.HueSaturationValue(hue_shift_limit=0.2,
-                             sat_shift_limit=0.2, 
-                             val_shift_limit=0.2, 
-                             p=0.5),
-        A.RandomBrightnessContrast(
-            brightness_limit=(-0.1, 0.1), 
-            contrast_limit=(-0.1, 0.1), 
-            p=0.5),
-        A.GaussNoise(p=0.5),
-        A.Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
-        ToTensorV2(p=1.0),
-    ])
-
-    return train_transforms
-
-
-def get_valid_transforms(
-        image_size: Tuple[int, int], 
-        mean: Tuple[float, float, float] = (0.548, 0.504, 0.479), 
-        std: Tuple[float, float, float] = (0.237, 0.247, 0.246)
-    ):
-    val_transforms = A.Compose([
-        A.Resize(image_size[0], image_size[1], p=1.0),
-        A.Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
-        ToTensorV2(p=1.0),
-    ])
-
-    return val_transforms
+        print(f"-- Oversampled Data")
+        print(f"Lesser Data: {len(lesser_class_group)}")
+        print(f"Greater Data: {len(greater_class_group)}\n")
 
 
 def generate_train_datasets(
@@ -263,7 +236,8 @@ def generate_train_datasets(
 
     # Train Dataset 생성
     train_dataset = MaskedFaceDataset()
-    train_dataset.transform = get_basic_train_transforms((128, 128))
+    # 추후 Transform 커스텀으로 받을 수 있도록 수정
+    train_dataset.transform = get_basic_train_transforms((256, 256))
 
     for label_data in tqdm(train_label_raw.iloc, total=len(train_label_raw)):
         target_image_dir = image_path + '/' + label_data["path"] + '/'
@@ -281,7 +255,7 @@ def generate_train_datasets(
 
     # Validation Dataset 생성
     valid_dataset = MaskedFaceDataset()
-    valid_dataset.transform = get_valid_transforms((128, 128))
+    valid_dataset.transform = get_valid_transforms((256, 256))
 
     for label_data in tqdm(valid_label_raw.iloc, total=len(valid_label_raw)):
         target_image_dir = image_path + '/' + label_data["path"] + '/'
@@ -300,6 +274,15 @@ def generate_train_datasets(
     train_dataset.generate_serve_list(DatasetType.General)
     valid_dataset.generate_serve_list(DatasetType.General)
     return train_dataset, valid_dataset
+
+
+def generate_test_datasets(
+        data_root_path: str,
+    ):
+    image_path = f"{data_root_path}/eval/images"
+    answer_board = pd.read_csv(f"{data_root_path}/eval/info.csv")
+
+    print(answer_board["ImageID"])
 
 
 def __add_data_to_dataset(
@@ -324,3 +307,50 @@ def __add_data_to_dataset(
     dataset.data.append(data)
 
     # 데이터셋에 데이터를 넣는 코드
+
+# 처음에는 상속 필요없이 매개변수 몇 개로 커버가 가능할 줄 알았는데 구조가 너무 복잡해졌음
+# 데이터셋을 상속 구조로 제대로 만들었으면 좋았을 터이지만 일단 이정도에서 마무리
+# 추후 시간이 되면 코드를 수정해보자. (시간이 없을 것 같지만)
+
+def get_basic_train_transforms(
+        image_size: Tuple[int, int], 
+        mean: Tuple[float, float, float] = (0.485, 0.456, 0.406), 
+        std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
+    ):  
+    # https://github.com/lukemelas/EfficientNet-PyTorch
+    # Mean, Std는 위 링크를 참조했으며 Efficientnet Pretrained Model의 설정 값으로 추정
+    min_length = min(image_size[0], image_size[1])
+    train_transforms = A.Compose([
+        SmallestMaxSize(max_size=min_length, always_apply=True),
+        A.CenterCrop(min_length, min_length, always_apply=True),
+        A.Resize(image_size[0], image_size[1], p=1.0),
+        A.HorizontalFlip(p=0.5),
+        A.ShiftScaleRotate(p=0.5, rotate_limit=15),
+        A.HueSaturationValue(hue_shift_limit=0.2,
+                             sat_shift_limit=0.2, 
+                             val_shift_limit=0.2, 
+                             p=0.5),
+        A.RandomBrightnessContrast(
+            brightness_limit=(-0.1, 0.1), 
+            contrast_limit=(-0.1, 0.1), 
+            p=0.5),
+        A.GaussNoise(p=0.5),
+        A.Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
+        ToTensorV2(p=1.0),
+    ])
+
+    return train_transforms
+
+
+def get_valid_transforms(
+        image_size: Tuple[int, int], 
+        mean: Tuple[float, float, float] = (0.548, 0.504, 0.479), 
+        std: Tuple[float, float, float] = (0.237, 0.247, 0.246)
+    ):
+    val_transforms = A.Compose([
+        A.Resize(image_size[0], image_size[1], p=1.0),
+        A.Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
+        ToTensorV2(p=1.0),
+    ])
+
+    return val_transforms
