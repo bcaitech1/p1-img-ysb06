@@ -7,8 +7,10 @@ from typing import Any, Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import pytz
+import sklearn.metrics as skm
 import torch
 import yaml
+from sklearn.metrics import f1_score
 from torch import device, nn, optim
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
@@ -66,20 +68,18 @@ class Trainee():
         print(f"Train Set Size: {len(train_set)}")
         print(f"Valid Set Size: {len(valid_set)}")
 
-        log_trained_content(self, train_type)
-
         pin_memory = "cuda" in str(self.device)
         self.train_set_loader = DataLoader(
             train_set, 
             batch_size=self.batch_size, 
-            num_workers=4, 
+            num_workers=2, 
             shuffle=True, 
             pin_memory=pin_memory
         )
         self.valid_set_loader = DataLoader(
             valid_set, 
             batch_size=self.batch_size, 
-            num_workers=4, 
+            num_workers=2, 
             shuffle=True, 
             pin_memory=pin_memory
         )
@@ -93,18 +93,20 @@ class Trainee():
         logger = SummaryWriter(
             log_dir=tensorboard_log_path + current_time
         )
-        log_trained_time(self, current_time)
 
         best_valid_accuracy = 0
+        best_valid_accuracy_epoch = 0
         best_valid_loss = np.inf
+        best_f1 = 0
+        best_f1_epoch = 0
 
         for epoch in range(self.epochs):
             # Train loop
-            print(f"\n----- Start Epoch: {datetime.now()}-----\n")
+            print(f"\n----- Start Epoch: {datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')}-----\n")
 
             self.model.train()
             loss_value = 0
-            matches = 0
+            tp_matches = 0
             for idx, (sources, labels, path_texts) in enumerate(self.train_set_loader):
                 # Load Data
                 sources = sources.to(self.device)
@@ -124,11 +126,11 @@ class Trainee():
 
                 # Examination
                 loss_value += loss.item()
-                matches += (predicts == labels).sum().item()
+                tp_matches += (predicts == labels).sum().item()
                 if (idx + 1) % self.log_interval == 0:
                     # Calc
                     train_loss = loss_value / self.log_interval
-                    train_accuracy = matches / (self.batch_size * self.log_interval)
+                    train_accuracy = tp_matches / (self.batch_size * self.log_interval)
                     current_lr = _get_lr(self.optimizer)
 
                     # Print examination result
@@ -144,7 +146,7 @@ class Trainee():
 
                     # Initialize examination
                     loss_value = 0
-                    matches = 0
+                    tp_matches = 0
 
             self.scheduler.step()
 
@@ -154,8 +156,10 @@ class Trainee():
                 self.model.eval()
 
                 loss_value = 0
-                matches = 0
+                tp_matches = 0
                 valid_sample = None
+                pred_list = []
+                label_list = []
                 for sources, labels, path_texts in self.valid_set_loader:
                     sources = sources.to(self.device)
                     labels = labels.to(self.device, dtype=torch.long)
@@ -164,8 +168,10 @@ class Trainee():
                     predicts = torch.argmax(outputs, dim=-1)
                     loss = self.criterion(outputs, labels)
                     loss_value += loss.item()
-                    matches += (predicts == labels).sum().item()
+                    tp_matches += (predicts == labels).sum().item()
 
+                    pred_list.extend(predicts.cpu().tolist())
+                    label_list.extend(labels.cpu().tolist())
                     # 추후 Label Smotheness 적용 후 가장 안 좋은 결과에 대해 저장
                     if valid_sample is None:
                         source_new = torch.clone(sources).detach().cpu().permute(0, 2, 3, 1).numpy()
@@ -173,17 +179,24 @@ class Trainee():
                 
                 # Validation 결과 계산
                 valid_loss = loss_value / len(self.valid_set_loader)
-                valid_accuracy = matches / len(self.valid_set_loader.dataset)
+                valid_accuracy = tp_matches / len(self.valid_set_loader.dataset)
                 best_valid_loss = min(best_valid_loss, valid_loss)
+                f1 = f1_score(label_list, pred_list, average='macro')
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_f1_epoch = epoch
 
                 # 모델 저장
                 # 추후 f1-score로 바꾸기
                 if valid_accuracy > best_valid_accuracy:
                     best_valid_accuracy = valid_accuracy
+                    best_valid_accuracy_epoch = epoch
                     print(f"New best model for val accuracy : {valid_accuracy:4.2%}! saving the best model..")
                     if not os.path.isdir(f"{checkpoint_save_path}{self.name}/"):
                         os.mkdir(f"{checkpoint_save_path}{self.name}/")
                     torch.save(self.model.state_dict(), f"{checkpoint_save_path}{self.name}/best.pth")
+                    logger.add_figure("Results", valid_sample, epoch)
+
                 torch.save(self.model.state_dict(), f"{checkpoint_save_path}{self.name}/last.pth")
                 
                 # Validation 결과 출력
@@ -191,13 +204,40 @@ class Trainee():
                 print(f"Current loss: {valid_loss:4.4}")
                 print(f"Best accuracy: {best_valid_accuracy:4.2%}")
                 print(f"Current accuracy: {valid_accuracy:4.2%}")
+                print(f"Best f1: {best_f1:4.2%}")
+                print(f"Current f1: {f1:4.2%}")
 
                 logger.add_scalar("Val/loss", valid_loss, epoch)
                 logger.add_scalar("Val/accuracy", valid_accuracy, epoch)
-                logger.add_figure("Results", valid_sample, epoch)
+                logger.add_scalar("Val/f1", f1, epoch)
 
-                print(f"\n----- End Epoch: {datetime.now()}-----\n")
+                print(f"\n----- End Epoch: {datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')}-----\n")
+        
+        print(f"End Training for {self.name}\n\n")
+        logger.close()
+        training_summary = {
+            "Training Info": {
+                "Trainee": self.name,
+                "Training start Time": current_time,
+                "Training end Time": datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S"),
+                "Trained Environment" : {
+                    "Model Name" : self.model._get_name(),
+                    "Model Backbone": self.model.backbone._get_name(),
+                    "Criterion": self.criterion._get_name(),
+                    "Optimizer": _get_class_name(self.optimizer),
+                    "LR Scheduler": _get_class_name(self.scheduler)
+                },
+                "Best Loss": best_valid_loss,
+                "Best Accuracy": best_valid_accuracy,
+                "Best Accuracy Epoch": best_valid_accuracy_epoch,
+                "Best F1-Score": best_f1,
+                "Best F1-Score Epoch": best_f1_epoch,
+            }
+        }
+        with open(f"{trainee_save_path}/{self.name}_summary.yaml", 'w') as fw:
+            yaml.dump(training_summary, fw)
 
+# Deprecated
 def generate_trainee(
         name: str,
         model: BaseModel,
@@ -283,18 +323,18 @@ def _get_class_name(target: Any):
 
 def make_sample(images, labels, predicts):
     # 주의 : Batch가 아닌 경우 오류 발생
-    if images.shape[0] > 8:
-        images = images[0:8]
-        labels = labels[0:8]
-        predicts = predicts[0:8]
+    if images.shape[0] > 6:
+        images = images[0:6]
+        labels = labels[0:6]
+        predicts = predicts[0:6]
 
-    sample_figure = plt.figure(figsize=(20, 10))
+    sample_figure = plt.figure(figsize=(11, 6))
 
     for idx, (image, label, predict) in enumerate(zip(images, labels.squeeze(), predicts)):
         label = label.item()
         predict = predict.item()
 
-        plt.subplot(2, 4, idx + 1, title=f"Label: {label} / Pred: {predict}")
+        plt.subplot(2, 3, idx + 1, title=f"Label: {label} / Pred: {predict}")
         plt.xticks([])
         plt.yticks([])
         plt.grid(False)

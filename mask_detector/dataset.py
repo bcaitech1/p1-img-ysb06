@@ -1,13 +1,13 @@
-from enum import Enum
-from typing import Any, List, Tuple
 import random
+from enum import Enum
+from glob import glob
+from typing import Any, List, Tuple
 
 import albumentations as A
 import cv2 as cv
 import pandas as pd
 from albumentations.augmentations import SmallestMaxSize
 from albumentations.pytorch import ToTensorV2
-from glob import glob
 from torch import Tensor
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -57,9 +57,6 @@ class PersonLabel():
 
     def get_correct_mask_label(self) -> int:
         return self.correct_mask
-    
-    def get_mask_label(self) -> int:
-        return 1
 
     def get_gender_label(self) -> int:
         return self.gender.value
@@ -90,10 +87,27 @@ class PersonLabel():
             label = self.get_under30_label()
         elif label_type == DatasetType.Over59Age:
             label = self.get_over59_label()
+        elif label_type == DatasetType.Mask_Combined:
+            if self.get_mask_exist_label():
+                if self.get_correct_mask_label():
+                    label = 0
+                else:
+                    label = 1
+            else:
+                label = 2
         else:
             label = self.get_combined_label()
         
         return label
+
+
+def get_label_count(label_type: DatasetType) -> int:
+    if label_type.value >= 1 and label_type.value <= 5:
+        return 2
+    elif label_type == DatasetType.Mask_Combined:
+        return 3
+    else:
+        return 18
 
 # 레이블 제공을 유연하게 할 수 있는 방법이 있을까?
 # Dict로 구성하고 Key를 받는 방식이면 가능했을 듯.
@@ -113,6 +127,8 @@ class MaskedFaceDataset(Dataset):
         self.transform: transforms.Compose = None
         self.serve_type = DatasetType.General
         self.serve_list = []
+        # 증가된 데이터셋 크기 (원래 데이터셋 크기는 len(self.data))
+        self.grown_size: int = 0    
 
     def __len__(self):
         return len(self.serve_list)
@@ -126,84 +142,60 @@ class MaskedFaceDataset(Dataset):
         return source, label, target.image_path
 
     def generate_serve_list(self, serve_type: DatasetType, shuffle: bool = False, random_seed: int = None):
-        self.serve_type = serve_type
         # 레이블 데이터를 Class List가 아닌 그냥 Pandas로 저장했으면 훨씬 더 좋았을 것 같음
         # 그러면 pandas가 제공하는 기능을 그대로 쓸 수 있었을 텐데...
-
-        rnd = random.Random(random_seed)
-        lesser_class_group = []
-        greater_class_group = []
-        # Oversampling
-        
         # 갑자기 든 생각이지만 성별, 나이 구분도 마스크 여부에 따라 달라지지 않을까?
         # 하지만 이것저것 다 고려하면 머리 터질 것 같아 더 이상 생각하지 않음
+        # 하위 수준 모델(마스크 제대로 썼는지, 60이상인지)에서 들어오는 데이터는 정확할 것이라고 판단.
+
+        # 마스크가 없는 데이터는 아예 넣지 않음
+        # 그런데 넣어도 될 것 같음...여유가 되면 넣은 것과 안 넣은 것 비교해 볼 것
+
+        self.serve_type = serve_type
+        rand = random.Random(random_seed)
+
+        data_by_target_class = [
+            [] for _ in range(get_label_count(serve_type))
+        ]
+        
         for index, data in enumerate(self.data):
-            # 하위 수준 모델(마스크 제대로 썼는지, 60이상인지)에서 들어오는 데이터는 정확할 것이라고 판단.
-            if serve_type == DatasetType.Mask_Weared:
-                # 마스크를 쓰지 않은 데이터가 적은 데이터이다 (2:5)
-                if data.label.mask_exist == False:
-                    lesser_class_group.append(index)
-                else:
-                    greater_class_group.append(index)
-            elif serve_type == DatasetType.Correct_Mask:
-                # 마스크를 잘못 쓴 데이터가 적은 데이터이다 (1:5)
-                if data.label.mask_exist == True:   # 마스크가 없는 데이터는 아예 넣지 않음
-                    # 그런데 넣어도 될 것 같음...여유가 되면 넣은 것과 안 넣은 것 비교해 볼 것
-                    if data.label.correct_mask == False:
-                        lesser_class_group.append(index)
-                    else:
-                        greater_class_group.append(index)
-            elif serve_type == DatasetType.Gender:
-                # 남자가 더 적은 데이터이다
-                if data.label.gender == Gender.Male:
-                    lesser_class_group.append(index)
-                else:
-                    greater_class_group.append(index)
-            elif serve_type == DatasetType.Under30Age:
-                # 남자가 더 적은 데이터이다
-                if data.label.age < 30:
-                    lesser_class_group.append(index)
-                else:
-                    greater_class_group.append(index)
-            elif serve_type == DatasetType.Over59Age:
-                if data.label.age > 59:
-                    lesser_class_group.append(index)
-                else:
-                    greater_class_group.append(index)
-            else:
-                self.serve_list = [*range(len(self.data))]
-                if shuffle:
-                    rnd.shuffle(self.serve_list)
-                return  
-                # 알 수 없는 데이터셋 형식은 원래 데이터 그대로 나오도록 처리
+            data_by_target_class[data.label.get_label(serve_type)].append(index)
         
-        print(f"-- Original Data")
-        print(f"Lesser Data: {len(lesser_class_group)}")
-        print(f"Greater Data: {len(greater_class_group)}\n")
+        # 제일 많은 데이터를 가진 클래스 판별
+        greatest_class_index = 0
+        greatest_class_size = -1
+        for index, group in enumerate(data_by_target_class):
+            if len(group) > greatest_class_size:
+                greatest_class_size = len(group)
+                greatest_class_index = index
 
+        # Oversampling
+        self.grown_size = 0
+        for index, group in enumerate(data_by_target_class):
+            # 셔플을 아래에서 하는데 여기서도 하는 이유는 
+            # 루프 마지막에서 사이즈 맞춰주기 위해 리스트를 자르는데
+            # 이 부분에서 편중된 데이터롤 자르지 않게 하기 위해
+            if shuffle:
+                rand.shuffle(group)
+
+            if index == greatest_class_index:
+                continue
+            prev_size = len(group)
+
+            grow_size = int(greatest_class_size / len(group))
+            group *= grow_size
+            group += group[:(greatest_class_size - len(group))]
+
+            self.grown_size += len(group) - prev_size
+        
+        self.serve_list = []
+        for group in data_by_target_class:
+            self.serve_list += group
+        
         if shuffle:
-            rnd.shuffle(lesser_class_group)
-            rnd.shuffle(greater_class_group)
-        
-        if len(lesser_class_group) > len(greater_class_group):
-            raise Exception("Dividing code error")
-        # 여기를 에러로 처리하지 말고 적은 쪽을 자동으로 판단하는 기능을 추가하자
+            rand.shuffle(self.serve_list)
 
-        while len(lesser_class_group) * 2 < len(greater_class_group):
-            lesser_class_group *= 2
-        lesser_class_group += lesser_class_group[:(len(greater_class_group) - len(lesser_class_group))]
-
-        if len(lesser_class_group) != len(greater_class_group):
-            raise Exception("Oversampling code error")
         
-        self.serve_list = greater_class_group + lesser_class_group
-        if shuffle:
-            rnd.shuffle(self.serve_list)
-        
-        print(f"-- Oversampled Data")
-        print(f"Lesser Data: {len(lesser_class_group)}")
-        print(f"Greater Data: {len(greater_class_group)}\n")
-
 
 def generate_train_datasets(
     data_root_path: str,
