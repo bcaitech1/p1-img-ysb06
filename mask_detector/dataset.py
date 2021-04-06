@@ -25,6 +25,7 @@ class DatasetType(Enum):
     Gender = 3
     Under30Age = 4
     Over59Age = 5
+    Mask_Combined = 6
 
 
 class PersonLabel():
@@ -47,7 +48,7 @@ class PersonLabel():
         if not self.mask_exist:
             label = 12
 
-        label += self.gender.value * 3 + self.get_age_label().item()
+        label += self.gender.value * 3 + self.get_age_label()
 
         return label
 
@@ -56,6 +57,9 @@ class PersonLabel():
 
     def get_correct_mask_label(self) -> int:
         return self.correct_mask
+    
+    def get_mask_label(self) -> int:
+        return 1
 
     def get_gender_label(self) -> int:
         return self.gender.value
@@ -281,8 +285,25 @@ def generate_test_datasets(
     ):
     image_path = f"{data_root_path}/eval/images"
     answer_board = pd.read_csv(f"{data_root_path}/eval/info.csv")
+    target_images_paths = image_path + "/" + answer_board["ImageID"]
+    print(target_images_paths)
 
-    print(answer_board["ImageID"])
+    dataset = MaskedFaceDataset()
+    dataset.transform = get_valid_transforms((256, 256))
+    for image_path in tqdm(target_images_paths):
+        image = cv.imread(image_path)
+        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+
+        data = Person()
+        data.image_path = image_path
+        data.image_raw = image
+
+        dataset.data.append(data)
+
+    dataset.generate_serve_list(DatasetType.General)
+    return dataset, answer_board
+
+    
 
 
 def __add_data_to_dataset(

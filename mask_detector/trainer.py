@@ -289,13 +289,12 @@ def make_sample(images, labels, predicts):
         predicts = predicts[0:8]
 
     sample_figure = plt.figure(figsize=(20, 10))
-    label_dict = ["Male", "Female"]
 
     for idx, (image, label, predict) in enumerate(zip(images, labels.squeeze(), predicts)):
         label = label.item()
         predict = predict.item()
 
-        plt.subplot(2, 4, idx + 1, title=f"Pred: {label_dict[predict]} / Label: {label_dict[label]}")
+        plt.subplot(2, 4, idx + 1, title=f"Label: {label} / Pred: {predict}")
         plt.xticks([])
         plt.yticks([])
         plt.grid(False)
