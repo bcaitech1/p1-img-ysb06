@@ -182,8 +182,9 @@ class MaskedFaceDataset(Dataset):
                 continue
             prev_size = len(group)
 
-            grow_size = int(greatest_class_size / len(group))
-            group *= grow_size
+            if len(group) > 0:
+                grow_size = int(greatest_class_size / len(group))
+                group *= grow_size
             group += group[:(greatest_class_size - len(group))]
 
             self.grown_size += len(group) - prev_size

@@ -230,7 +230,7 @@ class Trainee():
                 "Best Loss": best_valid_loss,
                 "Best Accuracy": best_valid_accuracy,
                 "Best Accuracy Epoch": best_valid_accuracy_epoch,
-                "Best F1-Score": best_f1,
+                "Best F1-Score": float(best_f1),
                 "Best F1-Score Epoch": best_f1_epoch,
             }
         }

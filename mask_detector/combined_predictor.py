@@ -76,16 +76,16 @@ class Predictor_M2():
         self.answer_board: pd.DataFrame = answer_board
         self.device: device = t_device
 
-        self.mask_model = BaseModel(num_classes=3).to(device)
+        self.mask_model = BaseModel(num_classes=3).to(self.device)
         self.mask_model.load_state_dict(torch.load(f"./result/checkpoint/mask-classifier/best.pth"))
         self.mask_model.eval()
-        self.gender_model = BaseModel(num_classes=2).to(device)
+        self.gender_model = BaseModel(num_classes=2).to(self.device)
         self.gender_model.load_state_dict(torch.load(f"./result/checkpoint/gender-classifier/best.pth"))
         self.gender_model.eval()
-        self.u30_model = BaseModel(num_classes=2).to(device)
+        self.u30_model = BaseModel(num_classes=2).to(self.device)
         self.u30_model.load_state_dict(torch.load(f"./result/checkpoint/u30-classifier/best.pth"))
         self.u30_model.eval()
-        self.o60_model = BaseModel(num_classes=2).to(device)
+        self.o60_model = BaseModel(num_classes=2).to(self.device)
         self.o60_model.load_state_dict(torch.load(f"./result/checkpoint/o59-classifier/best.pth"))
         self.o60_model.eval()
     
@@ -97,6 +97,8 @@ class Predictor_M2():
 
         print("Classifying...")
         for sources, _, _ in tqdm(self.data_loader):
+            sources = sources.to(self.device)
+
             mask_output = self.mask_model(sources)
             mask_output = mask_output.argmax(dim=-1)
             mask_predictions.extend(mask_output.cpu().numpy())
@@ -118,8 +120,6 @@ class Predictor_M2():
         self.answer_board["u30"] = u30_predictions
         self.answer_board["o59"] = o60_predictions
 
-        
-
         self.answer_board.loc[self.answer_board["mask"] == 1, "ans"] += 6
         self.answer_board.loc[self.answer_board["mask"] == 2, "ans"] += 12
         self.answer_board.loc[self.answer_board["gender"] == 1, "ans"] += 3
@@ -132,6 +132,37 @@ class Predictor_M2():
         raw_f.to_csv("./result/submission.csv", index=False)
         
         print("Prediction Complete!!")
+
+
+class Predictor_G1():
+    def __init__(self, batch_size: int, dataset: MaskedFaceDataset, answer_board: pd.DataFrame, t_device: device) -> None:
+        self.data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=2, pin_memory=True)
+        self.answer_board: pd.DataFrame = answer_board
+        self.device: device = t_device
+
+        self.model = BaseModel(num_classes=18).to(self.device)
+        self.model.load_state_dict(torch.load(f"./result/checkpoint/gen-classifier/best.pth"))
+        self.model.eval()
+    
+    def predict(self):
+        predictions = []
+
+        print("Classifying...")
+        for sources, _, _ in tqdm(self.data_loader):
+            sources = sources.to(self.device)
+
+            output = self.model(sources)
+            output = output.argmax(dim=-1)
+            predictions.extend(output.cpu().numpy())
+        
+        self.answer_board["ans"] = predictions
+
+        print("Printing...")
+        self.answer_board.to_csv("./result/result_raw.csv")
+        self.answer_board.to_csv("./result/submission.csv", index=False)
+
+        print("Prediction Complete!!")
+
 
 
 def submission_label_recalc():
