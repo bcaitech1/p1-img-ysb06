@@ -1,7 +1,7 @@
+import torch
 import torch.nn as nn
 from efficientnet_pytorch import EfficientNet
-
-# Model Template
+from torchvision.models import resnext101_32x8d
 
 
 class BaseModel(nn.Module):
@@ -12,9 +12,11 @@ class BaseModel(nn.Module):
             backbone_freeze=True
         ):
         super(BaseModel, self).__init__()
-        self.backbone = EfficientNet.from_pretrained(backbone_name, num_classes=4096)
+        # self.backbone = EfficientNet.from_pretrained(backbone_name, num_classes=4096)
+        self.backbone = resnext101_32x8d(pretrained=True)
         self.backbone.requires_grad_(not backbone_freeze)
-        self.backbone._fc.requires_grad_(True)
+        # self.backbone._fc.requires_grad_(True)    # efficientnet
+        self.backbone.fc = nn.Linear(in_features=2048, out_features=4096, bias=True)    # resnext
         self.classifier = nn.Sequential(
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),

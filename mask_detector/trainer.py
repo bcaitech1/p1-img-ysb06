@@ -73,14 +73,14 @@ class Trainee():
             train_set, 
             batch_size=self.batch_size, 
             num_workers=2, 
-            shuffle=True, 
+            shuffle=True,
             pin_memory=pin_memory
         )
         self.valid_set_loader = DataLoader(
             valid_set, 
-            batch_size=self.batch_size, 
+            batch_size=self.batch_size,
             num_workers=2, 
-            shuffle=True, 
+            shuffle=True,
             pin_memory=pin_memory
         )
 
@@ -89,7 +89,7 @@ class Trainee():
 
     def train(self):
         kst = pytz.timezone('Asia/Seoul')
-        current_time = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
+        current_time = datetime.now(kst).strftime("%Y-%m-%d %H.%M.%S")
         logger = SummaryWriter(
             log_dir=tensorboard_log_path + current_time
         )
