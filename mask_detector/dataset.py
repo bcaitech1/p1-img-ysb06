@@ -1,3 +1,4 @@
+from os import sep
 import random
 from enum import Enum
 from glob import glob
@@ -26,6 +27,7 @@ class DatasetType(Enum):
     Under30Age = 4
     Over59Age = 5
     Mask_Combined = 6
+    Gender_U30_Combined = 7
 
 
 class PersonLabel():
@@ -73,7 +75,10 @@ class PersonLabel():
         return int(self.age < 30)
 
     def get_over59_label(self) -> int:
-        return int(self.age > 59)
+        return int(self.age > 58)
+        # 기준을 58세 이상으로 바꾼거
+        # 이거 좀 꼼수인데....일단은 ㄱㄱ
+        # 1세만 높임
     
     def get_label(self, label_type: DatasetType) -> int:
         label: int = None
@@ -95,6 +100,15 @@ class PersonLabel():
                     label = 1
             else:
                 label = 2
+        elif label_type == DatasetType.Gender_U30_Combined:
+            # 모델을 가능한 한 적게 하는 것이 좋다는 것이 결론
+            # 마스크는 너무 확실해서 분리해도 좋지만
+            # 남녀의 경우 성능이 잘 나오지 않으므로 성능이 안 나오는 것 끼리 뭉쳐서 Tuning
+            # 60이상은 데이터가 없어서 원래 낮으므로 포기하는 수준
+            # 남자 <30 0, 여자 <30 1
+            # 남자 >=30 2, 여자 >=30 3
+            label = self.get_under30_label() * 2
+            label += self.get_gender_label()
         else:
             label = self.get_combined_label()
         
@@ -106,12 +120,14 @@ def get_label_count(label_type: DatasetType) -> int:
         return 2
     elif label_type == DatasetType.Mask_Combined:
         return 3
+    elif label_type == DatasetType.Gender_U30_Combined:
+        return 4
     else:
         return 18
 
 # 레이블 제공을 유연하게 할 수 있는 방법이 있을까?
-# Dict로 구성하고 Key를 받는 방식이면 가능했을 듯.
-# 다만, string key로 받는 방식을 좋아하지 않아(애매해짐 Vague) 그렇게 하지는 않음
+# Baseline도 내 코드처럼 복잡하지 않을 뿐이지 별도의 함수를 만듦
+# 저 보기 싫은 get_label_count를 합치고 유연하게 구조를 짤 수 있을 것 같은데 생각할 시간이 없음...
 
 
 class Person():
@@ -119,6 +135,9 @@ class Person():
         self.image_path: str = ""
         self.image_raw: Any = None
         self.label: PersonLabel = PersonLabel()
+
+# 클래스 명이 Person인 것은 원래는 사진 하나마다 다른 사람으로 처리할 생각이었음
+# 지금은 한 사람이 아닌 Picture 하나라고 보면 됨
 
 
 class MaskedFaceDataset(Dataset):
@@ -128,6 +147,8 @@ class MaskedFaceDataset(Dataset):
         self.serve_type = DatasetType.General
         self.serve_list = []
         # 증가된 데이터셋 크기 (원래 데이터셋 크기는 len(self.data))
+        # 원래는 증가된 만큼 Epoch를 줄이는 기준으로 사용하려고 했는데
+        # 그냥 tensorboard보고 수동으로 꺼버리는 것이 편함. 
         self.grown_size: int = 0    
 
     def __len__(self):
@@ -141,7 +162,7 @@ class MaskedFaceDataset(Dataset):
 
         return source, label, target.image_path
 
-    def generate_serve_list(self, serve_type: DatasetType, shuffle: bool = False, random_seed: int = None):
+    def generate_serve_list(self, serve_type: DatasetType, shuffle: bool = False, random_seed: int = None, oversampling: bool = True):
         # 레이블 데이터를 Class List가 아닌 그냥 Pandas로 저장했으면 훨씬 더 좋았을 것 같음
         # 그러면 pandas가 제공하는 기능을 그대로 쓸 수 있었을 텐데...
         # 갑자기 든 생각이지만 성별, 나이 구분도 마스크 여부에 따라 달라지지 않을까?
@@ -170,6 +191,7 @@ class MaskedFaceDataset(Dataset):
                 greatest_class_index = index
 
         # Oversampling
+        # 근데 Dataloader에 Sampler라는 관련 함수가 있다고...?
         self.grown_size = 0
         for index, group in enumerate(data_by_target_class):
             # 셔플을 아래에서 하는데 여기서도 하는 이유는 
@@ -182,10 +204,11 @@ class MaskedFaceDataset(Dataset):
                 continue
             prev_size = len(group)
 
-            if len(group) > 0:
-                grow_size = int(greatest_class_size / len(group))
-                group *= grow_size
-            group += group[:(greatest_class_size - len(group))]
+            if oversampling:
+                if len(group) > 0:
+                    grow_size = int(greatest_class_size / len(group))
+                    group *= grow_size
+                group += group[:(greatest_class_size - len(group))]
 
             self.grown_size += len(group) - prev_size
         
@@ -219,12 +242,14 @@ def generate_train_datasets(
     # train, valid Dataframe으로 나누는 작업
     valid_size = int(len(label_raw) * validation_ratio)
 
+    # 이미 여기서 사람들을 기준으로 Train과 Valid가 분리되어 있음 
+    # (처음 짤 때부터 이렇게 짬...나도 몰랐음 ㅋㅋ)
     valid_label_raw = label_raw.iloc[:valid_size + 1]
     train_label_raw = label_raw.iloc[valid_size + 1:]
     # 원래는 60세 이상의 데이터 갯수가 부족하면 채워넣도록 코드를 짜려고 했지만 
     # 생각보다 원하는 비율로 잘 맞춰지고 있어서 일단 유보
 
-    # 60 이상 분류가 잘 되지 않을 경우 수정할 것
+    # 60 이상 분류가 잘 되지 않을 경우 아래 코드를 주석 해제하여 수정할 것
     # count_60 = len(valid_label_raw[valid_label_raw["age"] > 59])
     # min_count_60 = int(192 * validation_ratio)
 
@@ -245,10 +270,11 @@ def generate_train_datasets(
         mask_images_path = glob(target_image_dir + "mask*")
         normal_image_path = glob(target_image_dir + "normal.*")[0]
 
-        __add_data_to_dataset(train_dataset,  inc_mask_image_path, gender, age, True, False)
+        target_id: str = label_data["id"]
+        __add_data_to_dataset(train_dataset,  inc_mask_image_path, gender, age, True, False, target_id)
         for mask_image_path in mask_images_path:
-            __add_data_to_dataset(train_dataset,  mask_image_path, gender, age, True, True)
-        __add_data_to_dataset(train_dataset,  normal_image_path, gender, age, False, False)
+            __add_data_to_dataset(train_dataset,  mask_image_path, gender, age, True, True, target_id)
+        __add_data_to_dataset(train_dataset,  normal_image_path, gender, age, False, False, target_id)
 
     # Validation Dataset 생성
     valid_dataset = MaskedFaceDataset()
@@ -263,10 +289,11 @@ def generate_train_datasets(
         mask_images_path = glob(target_image_dir + "mask*")
         normal_image_path = glob(target_image_dir + "normal.*")[0]
 
-        __add_data_to_dataset(valid_dataset,  inc_mask_image_path, gender, age, True, False)
+        target_id: str = label_data["id"]
+        __add_data_to_dataset(valid_dataset,  inc_mask_image_path, gender, age, True, False, target_id)
         for mask_image_path in mask_images_path:
-            __add_data_to_dataset(valid_dataset,  mask_image_path, gender, age, True, True)
-        __add_data_to_dataset(valid_dataset,  normal_image_path, gender, age, False, False)
+            __add_data_to_dataset(valid_dataset,  mask_image_path, gender, age, True, True, target_id)
+        __add_data_to_dataset(valid_dataset,  normal_image_path, gender, age, False, False, target_id)
 
     train_dataset.generate_serve_list(DatasetType.General)
     valid_dataset.generate_serve_list(DatasetType.General)
@@ -305,8 +332,12 @@ def __add_data_to_dataset(
     gender: int,
     age: int,
     mask_weared: bool,
-    mask_in_good_condition: bool
+    mask_in_good_condition: bool,
+    person_id : str
 ):
+    # Baseline에서는 레이블만 먼저 생성하고 getitem 시점에서 불러오지만
+    # 내 코드는 이미지까지 미리 메모리에 다 옮겨 놓고 시작
+    # 메모리 낭비가 심하지만 메모리를 최대한 써버리는게 내 코딩 스타일이라...
     image = cv.imread(image_path)
     image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
 
@@ -318,7 +349,9 @@ def __add_data_to_dataset(
     data.label.mask_exist = mask_weared
     data.label.correct_mask = mask_in_good_condition
 
+    data = fix_label(data, person_id)
     dataset.data.append(data)
+    
 
     # 데이터셋에 데이터를 넣는 코드
 
@@ -368,3 +401,51 @@ def get_valid_transforms(
     ])
 
     return val_transforms
+
+
+def fix_label(target: Person, target_id: str):
+    # 점점 땜빵 식 코드가 되어가지만...
+    # 이런 식의 코드가 아니면 수정할 방법이 없음 (코드를 다시 짜든가...ㅠ)
+    # Train 레이블을 제대로 주지 않은 운영진을 탓하자
+    if "000020" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.mask_exist = False
+        elif not target.label.correct_mask and not target.label.mask_exist:
+            target.label.mask_exist = True
+    elif "000070" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.correct_mask = True
+    elif "000645" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.correct_mask = True
+    elif "001498-1" == target_id:
+        target.label.gender = Gender.Female
+    elif "003514" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.correct_mask = True
+    elif "004418" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.mask_exist = False
+        elif not target.label.correct_mask and not target.label.mask_exist:
+            target.label.mask_exist = True
+    elif "004432" == target_id:
+        target.label.gender = Gender.Female
+    elif "005227" == target_id:
+        if not target.label.correct_mask and target.label.mask_exist:
+            target.label.mask_exist = False
+        elif not target.label.correct_mask and not target.label.mask_exist:
+            target.label.mask_exist = True
+    elif "006359" == target_id:
+        target.label.gender = Gender.Male
+    elif "006360" == target_id:
+        target.label.gender = Gender.Male
+    elif "006361" == target_id:
+        target.label.gender = Gender.Male
+    elif "006362" == target_id:
+        target.label.gender = Gender.Male
+    elif "006363" == target_id:
+        target.label.gender = Gender.Male
+    elif "006364" == target_id:
+        target.label.gender = Gender.Male
+        
+    return target

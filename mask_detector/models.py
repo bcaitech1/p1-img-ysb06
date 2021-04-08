@@ -13,10 +13,10 @@ class BaseModel(nn.Module):
         ):
         super(BaseModel, self).__init__()
         # self.backbone = EfficientNet.from_pretrained(backbone_name, num_classes=4096)
-        self.backbone = resnext101_32x8d(pretrained=True)
+        self.backbone = resnext101_32x8d(pretrained=True)   # 모델을 resnext로 바꿈 55 -> 70 (f1)
         self.backbone.requires_grad_(not backbone_freeze)
-        # self.backbone._fc.requires_grad_(True)    # efficientnet
-        self.backbone.fc = nn.Linear(in_features=2048, out_features=4096, bias=True)    # resnext
+        # self.backbone._fc.requires_grad_(True)    # efficientnet fc
+        self.backbone.fc = nn.Linear(in_features=2048, out_features=4096, bias=True)    # resnext fc
         self.classifier = nn.Sequential(
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),

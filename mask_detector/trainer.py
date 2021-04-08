@@ -61,8 +61,10 @@ class Trainee():
     def prepare_dataset(self, train_set: MaskedFaceDataset, valid_set: MaskedFaceDataset, train_type: DatasetType, random_seed: int=None):
         print(f"---- Switch training dataset to {train_type.name} dataset")
         train_set.generate_serve_list(train_type, shuffle=True, random_seed=random_seed)
+        print(f"[{train_set.grown_size}] data increased")
         print(f"---- Switch to validatation dataset as {train_type.name} dataset")
-        valid_set.generate_serve_list(train_type, shuffle=True)
+        valid_set.generate_serve_list(train_type, shuffle=True, random_seed=random_seed, oversampling=False)
+        print(f"[{valid_set.grown_size}] data increased")
 
         print()
         print(f"Train Set Size: {len(train_set)}")
@@ -91,7 +93,7 @@ class Trainee():
         kst = pytz.timezone('Asia/Seoul')
         current_time = datetime.now(kst).strftime("%Y-%m-%d %H.%M.%S")
         logger = SummaryWriter(
-            log_dir=tensorboard_log_path + current_time
+            log_dir=f"{tensorboard_log_path}{current_time} {self.name[:6]}"
         )
 
         best_valid_accuracy = 0
@@ -215,6 +217,7 @@ class Trainee():
         
         print(f"End Training for {self.name}\n\n")
         logger.close()
+        # 나중에 기록은 학습 하나하나마다 추가하는 식으로 바꾸기 (현재는 덮어쓰기)
         training_summary = {
             "Training Info": {
                 "Trainee": self.name,
