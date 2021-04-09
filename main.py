@@ -39,10 +39,10 @@ def train_model():
 
     # Enssemble 모델
     train_general_classifier(device, seed, train_set, valid_set)
-    # train_mask_classifier(device, seed, train_set, valid_set)
-    # train_gender_classifier(device, seed, train_set, valid_set)
-    # train_u30_classifier(device, seed, train_set, valid_set)
-    # train_o59_classifier(device, seed, train_set, valid_set)
+    train_mask_classifier(device, seed, train_set, valid_set)
+    train_gender_classifier(device, seed, train_set, valid_set)
+    train_u30_classifier(device, seed, train_set, valid_set)
+    train_o59_classifier(device, seed, train_set, valid_set)
 
     
 def train_mask_classifier(device, seed, train_set, valid_set):
