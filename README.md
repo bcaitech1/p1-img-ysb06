@@ -1,7 +1,7 @@
 # boostcamp-p1-image
 Image classification project for Naver AI Tech Boostcamp
 
-기본적으로 아래의 함수들을 사용하여 작업을 수행한다
+학습 및 추론의 과정은 main.py의 아래 함수를 사용하여 수행한다.
 
 - train_model
 
@@ -15,3 +15,5 @@ Image classification project for Naver AI Tech Boostcamp
     추론 모델을 실행한다. 대상 클래스를 수정하여 실행한다.
 
     자세한 내용은 combined_predictor 모듈을 참조한다.
+    
+관련 다른 모듈은 mask_detector에 저장되어 있다.
